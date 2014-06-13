@@ -43,9 +43,50 @@ def reprange_for_intensity(intensity):
 def barweight(w):
     return round(w/2.5)*2.5
 
-intensity_reps_map = {}
+class SetsGenerator(object):
+    def __init__(self, intensity_reps_map, set_limit_per_weight=0):
+        self.reset()
+        self.set_limit_per_weight = set_limit_per_weight
+        self.intensity_reps_map = intensity_reps_map
 
-def generate_reps(max_intensity, target_inol):
+    def reset(self):
+        self.start = 0
+        self.end = 0
+        self.sets = []
+        self.total_inol = 0
+        self.total_reps = 0
+        self.numsets = 0
+
+    def generate(self, start, end):
+        self.reset()
+        self.start = start
+        self.end = end
+
+        repless = 0
+        intensity = start
+        while intensity < end:
+            #reps = random.randint(replo, rephi)
+            replo, rephi, repopt, repmax = reprange_for_intensity(intensity)
+            key = (replo, rephi, repopt, repmax)
+            reps_within = self.intensity_reps_map[key]
+            #reps = rephi - repless
+            reps = replo
+            if reps < 1:
+                reps = 1
+            self.intensity_reps_map[key] += reps
+            self.total_reps += reps
+            set_inol = inol(intensity, reps)
+            if intensity >= MINIMUM_INTENSITY_FOR_INOL:
+                self.total_inol += set_inol
+            theset = (intensity, reps, set_inol)
+            self.sets.append(theset)
+            repless += 1
+            self.numsets += 1
+            if self.set_limit_per_weight > 0 and self.numsets == self.set_limit_per_weight:
+                intensity += WARMUP_INCREMENT
+                self.numsets = 0
+
+def generate_all_sets(max_intensity, target_inol, intensity_reps_map):
     """
     Return a list of (percent, rep, inol) pairs based on target (highest) intensity and inol
     percent is 0-100, rep is within the rep range, inol is calculated inol for that set.
@@ -54,43 +95,13 @@ def generate_reps(max_intensity, target_inol):
 
     The sum of inols will be approximately target_inol.
     """
-    global intensity_reps_map
 
-    for i in range(0, 100):
-        key = reprange_for_intensity(i)
-        intensity_reps_map[key] = 0
+    setsgen = SetsGenerator(intensity_reps_map, WARMUP_SETS_PER_WEIGHT)
+    setsgen.generate(50, max_intensity)
 
-    # generate warmup sets
-    start = 50
-    end = max_intensity
-    sets = []
-    total_inol = 0
-
-    repless = 0
-    total_reps = 0
-    intensity = start
-    numsets = 0
-    while intensity < end:
-        #reps = random.randint(replo, rephi)
-        replo, rephi, repopt, repmax = reprange_for_intensity(intensity)
-        key = (replo, rephi, repopt, repmax)
-        reps_within = intensity_reps_map[key]
-        #reps = rephi - repless
-        reps = replo
-        if reps < 1:
-            reps = 1
-        intensity_reps_map[key] += reps
-        total_reps += reps
-        set_inol = inol(intensity, reps)
-        if intensity >= MINIMUM_INTENSITY_FOR_INOL:
-            total_inol += set_inol
-        theset = (intensity, reps, set_inol)
-        sets.append(theset)
-        repless += 1
-        numsets += 1
-        if numsets == WARMUP_SETS_PER_WEIGHT:
-            intensity += WARMUP_INCREMENT
-            numsets = 0
+    sets = setsgen.sets[:]
+    total_inol = setsgen.total_inol
+    total_reps = setsgen.total_reps
 
     # generate target sets
     intensity = max_intensity
@@ -166,11 +177,21 @@ def generate_reps(max_intensity, target_inol):
 
     return sets
 
+def init_intensity_map():
+    m = {}
+    for i in range(0, 100):
+        key = reprange_for_intensity(i)
+        m[key] = 0
+    return m
+
 def main():
     if len(sys.argv) < 3:
-        print "usage: %s inol intensity" % (sys.argv[0])
-        print "inol - 0-1 (float)"
-        print "intensity - 0-100"
+        print "usage: %s <inol> <intensity> <1rm>" % (sys.argv[0])
+        print """
+    <inol>          0..2: Float
+    <intensity>     0..100: Integer (percent)
+    <1rm>           0..: Integer (kg)
+    """
         sys.exit(0)
 
     maxweight = 100
@@ -181,7 +202,9 @@ def main():
     target_intensity = int(sys.argv[2])
 
     newsets = []
-    sets = generate_reps(target_intensity, target_inol)
+    intensity_reps_map = init_intensity_map()
+
+    sets = generate_all_sets(target_intensity, target_inol, intensity_reps_map)
     totinol = 0
     for p, r, i in sets:
         w = barweight(p/100.0*maxweight)
