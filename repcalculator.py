@@ -28,6 +28,57 @@ def repopt_to_intensity(repopt):
     elif repopt == 15: return "80-89%"
     elif repopt == 7: return ">89%"
 
+class RepRange(object):
+    reps = {}
+    def __init__(self, intensity):
+        if intensity < 70:
+            replo, rephi, repopt, repmax = 3, 6, 24, 30
+        elif intensity < 80:
+            replo, rephi, repopt, repmax = 3, 6, 18, 24
+        elif intensity < 90:
+            replo, rephi, repopt, repmax = 2, 4, 15, 20
+        else:
+            replo, rephi, repopt, repmax = 1, 2, 7, 10
+
+        self.intensity = intensity
+        self.low = replo
+        self.high = rephi
+        self.optimal = repopt
+        self.repmax = repmax
+
+    def __hash__(self):
+        t = (self.low, self.high, self.optimal, self.repmax)
+        #print "hash(",t,") to", hash(t)
+        return hash(t)
+
+    def __eq__(self, another):
+        """for hashing to work properly"""
+        return hasattr(another, 'low') and \
+               hasattr(another, 'high') and \
+               hasattr(another, 'optimal') and \
+               hasattr(another, 'repmax') and \
+               another.low == self.low and \
+               another.high == self.high and \
+               another.optimal == self.optimal and \
+               another.repmax == self.repmax
+
+    def __str__(self):
+        t = (self.low, self.high, self.optimal, self.repmax)
+        return str(t)
+
+    @classmethod
+    def __assert_reps(klass):
+        if len(klass.reps.keys()) == 0:
+            for i in range(0, 101):
+                rr = RepRange(i)
+                klass.reps[rr] = 0
+
+    @classmethod
+    def add(klass, repsrange, repcount):
+        klass.__assert_reps()
+        #print "Add", repcount, "reps to", repsrange
+        klass.reps[repsrange] += repcount
+
 def reprange_for_intensity(intensity):
     if intensity < 70:
         replo, rephi, repopt, repmax = 3, 6, 24, 30
@@ -51,6 +102,9 @@ class Set(object):
         self.inol = reps / float(100-intensity)
         self.weight = intensity/100.0 * weight1rm
 
+    def __str__(self):
+        return "%d reps at %d%% => %.2f" % (self.reps, self.intensity, self.inol)
+
 class Sets(object):
     def __init__(self):
         self.sets = []
@@ -66,8 +120,6 @@ class Sets(object):
 
     def reps(self):
         return sum(map(lambda x: x.reps, self.sets))
-
-
 
 class SetsGenerator(object):
     def __init__(self, intensity_reps_map, maxweight, set_limit_per_weight=0):
@@ -117,6 +169,60 @@ class SetsGenerator(object):
         #return (sets[:], total_inol, total_reps)
         return ss
 
+class Generator(object):
+    MINIMAL_LOAD = 0
+    LOW_LOAD = 1
+    NORMAL_LOAD = 2
+    HIGH_LOAD = 3
+    def __init__(self, start, end, increment, num_sets_per_intensity, load, initial_inol, target_inol):
+        """Generate sets based on input parameters.
+        start                       intensity
+        end                         intensity, not including
+        target_inol                 target inol
+        num_sets_per_intensity      0=inf, else 1..N
+        """
+        self.start = start
+        self.end = end
+        self.increment = increment
+        self.num_sets_per_intensity = num_sets_per_intensity
+        self.load = load
+        self.target_inol = target_inol
+        self.initial_inol = initial_inol
+
+    def next(self):
+        print "self.start = ", self.start, "up to", self.end
+        intensity = self.start
+        inol = self.initial_inol
+        numsets = 0
+        # XXX: This is the optimal/maxrep value -- maxrep for high load?
+        optimal_rep_range = True
+        while intensity <= self.end and inol < self.target_inol and optimal_rep_range:
+            rr = RepRange(intensity)
+            count = 0
+            if self.load == Generator.MINIMAL_LOAD:
+                count = 1
+            elif self.load == Generator.LOW_LOAD:
+                count = rr.low
+            elif self.load == Generator.NORMAL_LOAD:
+                count = int(rr.low + (rr.high - rr.low)/2.0)
+            elif self.load == Generator.HIGH_LOAD:
+                count = rr.high
+            else:
+                raise Exception("Invalid value %s for load" % str(self.load))
+
+            s = Set(intensity, count, 1)
+            inol += s.inol
+
+            RepRange.add(rr, count)
+
+            numsets += 1
+            # if 0 sets per intensity, just continue until inol or rep target is reached
+            if self.num_sets_per_intensity > 0 and numsets == self.num_sets_per_intensity:
+                intensity += self.increment
+                numsets = 0
+
+            yield s
+
 
 def generate_all_sets(max_intensity, target_inol, intensity_reps_map, maxweight):
     """
@@ -131,6 +237,30 @@ def generate_all_sets(max_intensity, target_inol, intensity_reps_map, maxweight)
     warmup_gen = SetsGenerator(intensity_reps_map, maxweight, WARMUP_SETS_PER_WEIGHT)
     #sets, total_inol, total_reps = warmup_gen.generate(50, max_intensity)
     ss = warmup_gen.generate(50, max_intensity)
+
+    increment = 10
+    inol = 0
+    warmup = Generator(50, max_intensity-increment, increment, 2, Generator.NORMAL_LOAD, inol, target_inol)
+    for s in warmup.next():
+        print s
+        inol += s.inol
+
+    print "Inol", inol
+
+    workout = Generator(max_intensity, max_intensity, increment, 0, Generator.LOW_LOAD, inol, target_inol)
+    for s in workout.next():
+        print s
+        inol += s.inol
+
+    print "Inol", inol
+
+    del inol
+
+    print "generator:"
+    for key, value in RepRange.reps.items():
+        print key, "=", value
+    print ""
+    print "done"
 
     print "sets: inol=", ss.inol(), "reps=", ss.reps()
 
