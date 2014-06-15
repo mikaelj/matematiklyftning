@@ -43,50 +43,82 @@ def reprange_for_intensity(intensity):
 def barweight(w):
     return round(w/2.5)*2.5
 
+class Set(object):
+    def __init__(self, intensity, reps, weight1rm):
+        self.intensity = intensity
+        self.weight1rm = weight1rm
+        self.reps = reps
+        self.inol = reps / float(100-intensity)
+        self.weight = intensity/100.0 * weight1rm
+
+class Sets(object):
+    def __init__(self):
+        self.sets = []
+
+    def append(self, s):
+        self.sets.append(s)
+
+    def count(self):
+        return len(self.sets)
+
+    def inol(self):
+        return sum(map(lambda x: x.inol if x.intensity >= MINIMUM_INTENSITY_FOR_INOL else 0, self.sets))
+
+    def reps(self):
+        return sum(map(lambda x: x.reps, self.sets))
+
+
+
 class SetsGenerator(object):
-    def __init__(self, intensity_reps_map, set_limit_per_weight=0):
+    def __init__(self, intensity_reps_map, maxweight, set_limit_per_weight=0):
         self.reset()
         self.set_limit_per_weight = set_limit_per_weight
         self.intensity_reps_map = intensity_reps_map
+        self.maxweight = maxweight
 
     def reset(self):
         self.start = 0
         self.end = 0
-        self.sets = []
-        self.total_inol = 0
-        self.total_reps = 0
-        self.numsets = 0
 
     def generate(self, start, end):
+        sets = []
         self.reset()
         self.start = start
         self.end = end
 
-        repless = 0
+        total_inol = 0
+        total_reps = 0
+        ss = Sets()
+
+        numsets = 0
         intensity = start
         while intensity < end:
-            #reps = random.randint(replo, rephi)
+
+            #rr = RepRange(intensity)
+
             replo, rephi, repopt, repmax = reprange_for_intensity(intensity)
             key = (replo, rephi, repopt, repmax)
             reps_within = self.intensity_reps_map[key]
-            #reps = rephi - repless
             reps = replo
-            if reps < 1:
-                reps = 1
-            self.intensity_reps_map[key] += reps
-            self.total_reps += reps
-            set_inol = inol(intensity, reps)
-            if intensity >= MINIMUM_INTENSITY_FOR_INOL:
-                self.total_inol += set_inol
-            theset = (intensity, reps, set_inol)
-            self.sets.append(theset)
-            repless += 1
-            self.numsets += 1
-            if self.set_limit_per_weight > 0 and self.numsets == self.set_limit_per_weight:
-                intensity += WARMUP_INCREMENT
-                self.numsets = 0
 
-def generate_all_sets(max_intensity, target_inol, intensity_reps_map):
+            #rr.add(reps)
+
+            self.intensity_reps_map[key] += reps
+
+            s = Set(intensity, reps, self.maxweight)
+            ss.append(s)
+
+            numsets += 1
+            if self.set_limit_per_weight > 0 and numsets == self.set_limit_per_weight:
+                intensity += WARMUP_INCREMENT
+                numsets = 0
+
+        print "Total inol", total_inol, "vs Sets.inol():", ss.inol()
+        #return (sets[:], total_inol, total_reps)
+        return ss
+
+
+def generate_all_sets(max_intensity, target_inol, intensity_reps_map, maxweight):
     """
     Return a list of (percent, rep, inol) pairs based on target (highest) intensity and inol
     percent is 0-100, rep is within the rep range, inol is calculated inol for that set.
@@ -96,25 +128,24 @@ def generate_all_sets(max_intensity, target_inol, intensity_reps_map):
     The sum of inols will be approximately target_inol.
     """
 
-    setsgen = SetsGenerator(intensity_reps_map, WARMUP_SETS_PER_WEIGHT)
-    setsgen.generate(50, max_intensity)
+    warmup_gen = SetsGenerator(intensity_reps_map, maxweight, WARMUP_SETS_PER_WEIGHT)
+    #sets, total_inol, total_reps = warmup_gen.generate(50, max_intensity)
+    ss = warmup_gen.generate(50, max_intensity)
 
-    sets = setsgen.sets[:]
-    total_inol = setsgen.total_inol
-    total_reps = setsgen.total_reps
+    print "sets: inol=", ss.inol(), "reps=", ss.reps()
+
+    sets = [(s.intensity, s.reps, s.inol) for s in ss.sets]
 
     # generate target sets
     intensity = max_intensity
 
     total_reps = 0
+    total_inol = 0
     repopt = 1000
     replo, rephi, repopt, repmax = reprange_for_intensity(intensity)
 
     repdiff = (rephi - replo)/2
     set_reps = replo + (repdiff * target_inol)
-    #set_reps = replo
-    #target_reps = maxrep - set_reps
-    #target_reps = (repopt + repmax)/2
     target_reps = repopt
     while total_inol < target_inol and total_reps < target_reps:
         replo, rephi, repopt, repmax = reprange_for_intensity(intensity)
@@ -131,8 +162,6 @@ def generate_all_sets(max_intensity, target_inol, intensity_reps_map):
         sets.append(theset)
 
     while total_inol < target_inol:
-        #print "Missing inol, diff %.2f" % (target_inol - total_inol)
-
         intensity -= 5
 
         total_reps = 0
@@ -141,9 +170,6 @@ def generate_all_sets(max_intensity, target_inol, intensity_reps_map):
         set_reps = rephi
         numsets = 0
         while total_inol < target_inol and total_reps < repmax-set_reps and numsets < BACKOFF_SETS_PER_INTENSITY:
-            #print "total_inol", total_inol
-            #print "total_reps", total_reps
-            #print "numsets", numsets
             replo, rephi, repopt, repmax = reprange_for_intensity(intensity)
             key = (replo, rephi, repopt, repmax)
             reps_within = intensity_reps_map[key]
@@ -159,14 +185,6 @@ def generate_all_sets(max_intensity, target_inol, intensity_reps_map):
 
 
     print "Total reps: %d, optimum reps: %d" % (total_reps, repopt)
-
-    """
-    totinol = 0
-    for p, r, i in sets:
-        w = barweight(p/100.0*maxweight)
-        print "%3d%%: %5.1f x %d = INOL %.2f" % (p, w, r, i)
-        totinol += i
-    """
 
     print
     for (replo, rephi, repopt, repmax), reps in intensity_reps_map.items():
@@ -204,7 +222,7 @@ def main():
     newsets = []
     intensity_reps_map = init_intensity_map()
 
-    sets = generate_all_sets(target_intensity, target_inol, intensity_reps_map)
+    sets = generate_all_sets(target_intensity, target_inol, intensity_reps_map, maxweight)
     totinol = 0
     for p, r, i in sets:
         w = barweight(p/100.0*maxweight)
